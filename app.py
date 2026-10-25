@@ -1,132 +1,107 @@
+import os
+import json
+import numpy as np
+import pandas as pd
 import streamlit as st
 import cv2
 import face_recognition
-import numpy as np
-import pandas as pd
 from datetime import datetime
-import os
 
-st.set_page_config(page_title="AI Smart Attendance System", page_icon="📸", layout="wide")
+# Page Configuration (Dark High-Tech UI)
+st.set_page_config(page_title="Smart AI Attendance System", layout="wide", page_icon="🪪")
 
-st.title("📸 AI Face Recognition Attendance System")
-st.write("Webcam ke samne aayein. System aapka face recognize karke real-time attendance mark kar dega.")
+# Folder & Database Setup
+STUDENTS_DIR = "students_data"
+RECORDS_DIR = "attendance_records"
+DB_FILE = "students.json"
 
-# Data directory setup for images and attendance sheet
-FACES_DIR = "known_faces"
-ATTENDANCE_FILE = "attendance.csv"
+os.makedirs(STUDENTS_DIR, exist_ok=True)
+os.makedirs(RECORDS_DIR, exist_ok=True)
 
-os.makedirs(FACES_DIR, exist_ok=True)
+if not os.path.exists(DB_FILE):
+    with open(DB_FILE, "w") as f:
+        json.dump({}, f)
 
-if not os.path.exists(ATTENDANCE_FILE):
-    df = pd.DataFrame(columns=["Name", "Date", "Time"])
-    df.to_csv(ATTENDANCE_FILE, index=False)
+def load_students():
+    with open(DB_FILE, "r") as f:
+        return json.load(f)
 
-# Helper function to load known face encodings
-@st.cache_resource
-def load_known_faces():
-    known_encodings = []
-    known_names = []
-    
-    for filename in os.listdir(FACES_DIR):
-        if filename.endswith((".jpg", ".png", ".jpeg")):
-            path = os.path.join(FACES_DIR, filename)
-            image = face_recognition.load_image_file(path)
-            encodings = face_recognition.face_encodings(image)
-            
-            if encodings:
-                known_encodings.append(encodings[0])
-                name = os.path.splitext(filename)[0].replace("_", " ").title()
-                known_names.append(name)
-                
-    return known_encodings, known_names
+def save_students(data):
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-def mark_attendance(name):
-    df = pd.read_csv(ATTENDANCE_FILE)
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    current_time = datetime.now().strftime("%H:%M:%S")
+# Custom High-Tech Styling
+st.markdown("""
+    <style>
+    .main { background-color: #0d1117; color: #c9d1d9; }
+    .stButton>button { background-color: #238636; color: white; border-radius: 8px; width: 100%; }
+    .card { background-color: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; }
+    </style>
+""", unsafe_allow_html=True)
 
-    # Check if already marked for today
-    already_marked = ((df["Name"] == name) & (df["Date"] == today_date)).any()
+st.title("🪪 AI Face Recognition Attendance System")
 
-    if not already_marked:
-        new_entry = pd.DataFrame([{"Name": name, "Date": today_date, "Time": current_time}])
-        df = pd.concat([df, new_entry], ignore_index=True)
-        df.to_csv(ATTENDANCE_FILE, index=False)
-        return True, current_time
-    return False, None
+# Sidebar Navigation
+menu = st.sidebar.radio(
+    "Select System Mode", 
+    ["1. Register New Student (Live Camera)", "2. Live Attendance Scanner", "3. Attendance Records & Excel"]
+)
 
-# Sidebar Setup
-st.sidebar.title("⚙️ System Control")
-mode = st.sidebar.radio("Navigation", ["Mark Attendance (Scanner)", "Register New Face", "View Attendance Logs"])
+students_db = load_students()
 
-known_encodings, known_names = load_known_faces()
+# ================= STEP 1: LIVE STUDENT REGISTRATION =================
+if menu == "1. Register New Student (Live Camera)":
+    st.header("📸 Student Face & Profile Registration")
+    st.write("Student ki details enter karein aur webcam se clear face photo capture karein.")
 
-# MODE 1: MARK ATTENDANCE
-if mode == "Mark Attendance (Scanner)":
-    st.subheader("📷 Face Scanner")
-    img_file_buffer = st.camera_input("Capture photo to mark attendance")
+    col1, col2 = st.columns([1, 1])
 
-    if img_file_buffer is not None:
-        bytes_data = img_file_buffer.getvalue()
-        cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-        rgb_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
-
-        face_locations = face_recognition.face_locations(rgb_img)
-        face_encodings = face_recognition.face_encodings(rgb_img, face_locations)
-
-        if not face_encodings:
-            st.warning("⚠️ Koi face detect nahi hua! Frame mein sahi se saamne aayein.")
-        else:
-            for face_encoding in face_encodings:
-                matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=0.5)
-                name = "Unknown"
-
-                face_distances = face_recognition.face_distance(known_encodings, face_encoding)
-                if len(face_distances) > 0:
-                    best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index]:
-                        name = known_names[best_match_index]
-
-                if name != "Unknown":
-                    marked, time_str = mark_attendance(name)
-                    if marked:
-                        st.success(f"✅ Attendance Marked for **{name}** at {time_str}!")
-                        st.balloons()
-                    else:
-                        st.info(f"ℹ️ **{name}** ki attendance aaj ke liye pehle se marked hai.")
-                else:
-                    st.error("❌ Unregistered Face! Pehle 'Register New Face' tab par jaakar registration karein.")
-
-# MODE 2: REGISTER NEW FACE
-elif mode == "Register New Face":
-    st.subheader("👤 Register Student/Employee")
-    new_name = st.text_input("Enter Full Name:")
-    new_photo = st.camera_input("Take Photo for Registration")
-
-    if st.button("Save Face Data"):
-        if new_name and new_photo:
-            clean_name = new_name.strip().replace(" ", "_").lower()
-            file_path = os.path.join(FACES_DIR, f"{clean_name}.jpg")
-            
-            with open(file_path, "wb") as f:
-                f.write(new_photo.getbuffer())
-                
-            st.success(f"🎉 **{new_name}** ka face record successfully save ho gaya hai!")
-            st.cache_resource.clear()
-        else:
-            st.warning("Kripya Naam aur Photo dono provide karein.")
-
-# MODE 3: VIEW ATTENDANCE LOGS
-elif mode == "View Attendance Logs":
-    st.subheader("📋 Attendance Records")
-    if os.path.exists(ATTENDANCE_FILE):
-        df_logs = pd.read_csv(ATTENDANCE_FILE)
-        st.dataframe(df_logs, use_container_width=True)
-        
-        csv_data = df_logs.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Attendance CSV Sheet",
-            data=csv_data,
-            file_name=f"attendance_report_{datetime.now().strftime('%Y-%m-%d')}.csv",
-            mime="text/csv"
+    with col1:
+        roll_no = st.text_input("Roll Number / ID")
+        student_name = st.text_input("Full Name")
+        department = st.text_input("Department / Branch", "CSE (AI & ML)")
+        subjects = st.multiselect(
+            "Enrolled Subjects", 
+            ["Data Structures", "Operating Systems", "Machine Learning", "Python", "Mathematics"], 
+            default=["Data Structures"]
         )
+
+    with col2:
+        st.subheader("Live Camera Capture")
+        camera_image = st.camera_input("Take a photo of the student")
+
+    if st.button("💾 Register & Save Student Permanently"):
+        if not roll_no or not student_name or camera_image is None:
+            st.error("Kripya Roll No, Name aur Live Camera Photo teeno provide karein!")
+        else:
+            # Save Image File
+            img_filename = f"{roll_no}_{student_name.replace(' ', '_')}.jpg"
+            img_path = os.path.join(STUDENTS_DIR, img_filename)
+
+            with open(img_path, "wb") as f:
+                f.write(camera_image.getbuffer())
+
+            # AI Model Face Detection Verification
+            image = face_recognition.load_image_file(img_path)
+            encodings = face_recognition.face_encodings(image)
+
+            if len(encodings) == 0:
+                st.error("❌ Photo me koi face detect nahi hua! Kripya dobara clear light me photo lein.")
+                os.remove(img_path)
+            else:
+                # Save details into JSON Database
+                students_db[roll_no] = {
+                    "name": student_name,
+                    "roll_no": roll_no,
+                    "department": department,
+                    "subjects": subjects,
+                    "image_path": img_path
+                }
+                save_students(students_db)
+                st.success(f"✅ Student {student_name} ({roll_no}) successfully register ho gaya hai aur database me save ho gaya!")
+
+    st.subheader("📋 Registered Students Database")
+    if students_db:
+        st.json(students_db)
+    else:
+        st.info("Abhi tak koi student register nahi hua hai.")
