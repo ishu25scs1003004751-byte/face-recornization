@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import base64
 import pandas as pd
@@ -38,6 +39,24 @@ def load_students():
 def save_students(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
+
+
+SUBJECTS_FILE = "subjects.json"
+DEFAULT_SUBJECTS = ["Data Structures", "Operating Systems", "Machine Learning", "Python"]
+BASE_COLS = ["Roll No", "Student Name", "Department"]
+DATE_FILE_RE = r"^Attendance_\d{4}-\d{2}-\d{2}\.xlsx$"
+
+
+def save_subjects(data):
+    with open(SUBJECTS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+def load_subjects():
+    if not os.path.exists(SUBJECTS_FILE):
+        save_subjects(DEFAULT_SUBJECTS)
+    with open(SUBJECTS_FILE, "r") as f:
+        return json.load(f)
 
 
 # ------------------------------------------------------------------
@@ -221,8 +240,11 @@ page = st.session_state.page
 # ==================================================================
 if page == "home":
     today = datetime.now().strftime("%Y-%m-%d")
-    sheets_today = len([f for f in os.listdir(RECORDS_DIR) if f.endswith(f"{today}.xlsx")])
-    total_sheets = len([f for f in os.listdir(RECORDS_DIR) if f.endswith(".xlsx")])
+    today_file = os.path.join(RECORDS_DIR, f"Attendance_{today}.xlsx")
+    sheets_today = 0
+    if os.path.exists(today_file):
+        sheets_today = len([c for c in pd.read_excel(today_file, nrows=0).columns if c not in BASE_COLS])
+    total_sheets = len([f for f in os.listdir(RECORDS_DIR) if re.match(DATE_FILE_RE, f)])
 
     st.markdown(
         f"""
@@ -231,8 +253,8 @@ if page == "home":
   <p>Register students, mark attendance with the camera, and check reports. All in one place.</p>
   <div class="hero-stats">
     <div class="hero-stat"><b>{len(students_db)}</b><span>Registered students</span></div>
-    <div class="hero-stat"><b>{sheets_today}</b><span>Classes marked today</span></div>
-    <div class="hero-stat"><b>{total_sheets}</b><span>Total sheets</span></div>
+    <div class="hero-stat"><b>{sheets_today}</b><span>Subjects marked today</span></div>
+    <div class="hero-stat"><b>{total_sheets}</b><span>Dates recorded</span></div>
   </div>
 </div>
 """,
@@ -250,7 +272,7 @@ if page == "home":
     with c2:
         st.markdown(
             '<div class="opt opt-live"><div class="opt-icon">📸</div><h3>Live attendance</h3>'
-            "<p>Pick the class, scan a face with the camera, and mark the student present.</p></div>",
+            "<p>Choose the subject first, then scan a face to mark the student present.</p></div>",
             unsafe_allow_html=True,
         )
         st.button("Start attendance", key="go_live", on_click=go, args=("live",))
@@ -281,15 +303,7 @@ elif page == "register":
             student_name = st.text_input("Full name", placeholder="e.g. Ishu Mishra")
             department = st.text_input("Department", "CSE (AI & ML)")
 
-            preset_subs = ["Data Structures", "Operating Systems", "Machine Learning", "Python"]
-            selected_subjects = st.multiselect("Subjects", preset_subs, default=["Data Structures"])
-            custom_sub_text = st.text_input(
-                "Other subjects (optional)", placeholder="Separate with commas: Cloud Computing, Cyber Security"
-            )
-            final_registered_subs = list(selected_subjects)
-            for item in [s.strip() for s in custom_sub_text.split(",") if s.strip()]:
-                if item not in final_registered_subs:
-                    final_registered_subs.append(item)
+            st.caption("Subjects are chosen later, when you take attendance.")
             card_end()
 
         with col_cam:
@@ -312,11 +326,10 @@ elif page == "register":
                             "name": student_name,
                             "roll_no": roll_no,
                             "department": department,
-                            "subjects": final_registered_subs,
                             "image_path": img_path,
                         }
                         save_students(students_db)
-                        st.success(f"{student_name} ({roll_no}) is registered for {', '.join(final_registered_subs)}.")
+                        st.success(f"{student_name} ({roll_no}) is registered.")
                     except Exception as e:
                         st.error(f"Could not save the student: {e}")
 
@@ -338,8 +351,8 @@ elif page == "register":
                 with c_info:
                     st.markdown(
                         f'<div class="student-name">{s["name"]}</div>'
-                        f'<div class="student-meta">{s["roll_no"]} · {s["department"]} · '
-                        f'{", ".join(s["subjects"])}</div>',
+                        f'<div class="student-meta">{s["roll_no"]} · {s["department"]}'
+                        f'</div>',
                         unsafe_allow_html=True,
                     )
                 with c_btn:
@@ -373,29 +386,70 @@ elif page == "register":
 # LIVE ATTENDANCE
 # ==================================================================
 elif page == "live":
-    page_header("Live attendance", "Choose the class, then capture the student's face.")
+    page_header("Live attendance", "Choose the subject first, then scan the student's face.")
 
-    CUSTOM = "Other (type below)"
-    preset_subjects = ["Data Structures", "Operating Systems", "Machine Learning", "Python", CUSTOM]
+    subjects = load_subjects()
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
 
-    card_start("Class")
-    c1, c2 = st.columns(2)
-    with c1:
-        subject_choice = st.selectbox("Subject", preset_subjects)
-    with c2:
-        if subject_choice == CUSTOM:
-            current_subject = st.text_input("Subject name", placeholder="e.g. Cloud Computing")
-        else:
-            current_subject = subject_choice
-            st.text_input("Date", datetime.now().strftime("%d %b %Y"), disabled=True)
+    # A subject added a moment ago becomes the selected one on this run
+    if "pending_subject" in st.session_state:
+        st.session_state["live_subject"] = st.session_state.pop("pending_subject")
+
+    card_start(
+        "Subject",
+        f"Today is {now.strftime('%d %b %Y')}. Attendance goes into today's sheet, in this subject's own column.",
+    )
+    current_subject = st.selectbox(
+        "Which subject are you taking attendance for?",
+        subjects,
+        index=None,
+        placeholder="Choose a subject",
+        key="live_subject",
+    )
+
+    with st.expander("Add or remove a subject"):
+        a1, a2 = st.columns([3, 1], vertical_alignment="bottom")
+        with a1:
+            new_sub = st.text_input("New subject name", placeholder="e.g. Cloud Computing", key="new_sub")
+        with a2:
+            add_clicked = st.button("Add", key="add_sub")
+        if add_clicked:
+            name = new_sub.strip()
+            if not name:
+                st.error("Type a subject name first.")
+            elif name in BASE_COLS or name.lower() in [x.lower() for x in subjects]:
+                st.warning("That subject already exists, or the name is not allowed.")
+            else:
+                subjects.append(name)
+                save_subjects(subjects)
+                st.session_state["pending_subject"] = name
+                st.rerun()
+
+        if subjects:
+            r1, r2 = st.columns([3, 1], vertical_alignment="bottom")
+            with r1:
+                to_remove = st.selectbox(
+                    "Remove a subject", subjects, index=None, placeholder="Choose a subject to remove", key="rm_sub"
+                )
+            with r2:
+                rm_clicked = st.button("Remove", key="rm_btn", type="secondary")
+            if rm_clicked and to_remove:
+                subjects.remove(to_remove)
+                save_subjects(subjects)
+                st.rerun()
     card_end()
 
     col_cam, col_info = st.columns([1.2, 1], gap="large")
+    live_photo = None
 
     with col_cam:
-        card_start("Camera")
-        live_photo = st.camera_input("Scan face", label_visibility="collapsed")
-        card_end()
+        if current_subject:
+            card_start("Camera", f"Marking attendance for {current_subject}.")
+            live_photo = st.camera_input("Scan face", label_visibility="collapsed", key=f"cam_{current_subject}")
+            card_end()
+        else:
+            st.info("Choose a subject above to open the camera.")
 
     with col_info:
         st.markdown("#### Result")
@@ -405,56 +459,43 @@ elif page == "live":
             unsafe_allow_html=True,
         )
 
-    if live_photo is not None:
+    if live_photo is not None and current_subject:
         if not students_db:
             st.warning("No students yet. Register a student first.")
-        elif not current_subject.strip():
-            st.error("Enter a subject name.")
         else:
             with st.spinner("Marking attendance..."):
                 try:
                     latest_roll = list(students_db.keys())[-1]
                     st_info = students_db[latest_roll]
-
-                    now = datetime.now()
-                    date_str = now.strftime("%Y-%m-%d")
                     time_str = now.strftime("%H:%M:%S")
+                    excel_file = os.path.join(RECORDS_DIR, f"Attendance_{date_str}.xlsx")
 
-                    clean_sub_name = "".join(
-                        c for c in current_subject if c.isalnum() or c in (" ", "_", "-")
-                    ).strip().replace(" ", "_")
-                    excel_file = os.path.join(RECORDS_DIR, f"Attendance_{clean_sub_name}_{date_str}.xlsx")
-
-                    all_rows = []
-                    for r_no, data in students_db.items():
-                        is_present = r_no == st_info["roll_no"]
-                        all_rows.append(
-                            {
-                                "Roll No": data["roll_no"],
-                                "Student Name": data["name"],
-                                "Department": data["department"],
-                                "Subject": current_subject,
-                                "Date": date_str,
-                                "Time": time_str if is_present else "-",
-                                "Status": "Present" if is_present else "Absent",
-                            }
-                        )
-                    df_full = pd.DataFrame(all_rows)
-
+                    # One sheet per date: student rows, one column per subject
                     if os.path.exists(excel_file):
-                        df_existing = pd.read_excel(excel_file)
-                        mask = df_existing["Roll No"].astype(str) == str(st_info["roll_no"])
-                        df_existing.loc[mask, "Status"] = "Present"
-                        df_existing.loc[mask, "Time"] = time_str
-                        df_existing.to_excel(excel_file, index=False)
-                        df_now = df_existing
+                        df = pd.read_excel(excel_file, dtype={"Roll No": str})
                     else:
-                        df_full.to_excel(excel_file, index=False)
-                        df_now = df_full
+                        df = pd.DataFrame(columns=BASE_COLS)
 
-                    total_students = len(df_now)
-                    present_count = int((df_now["Status"] == "Present").sum())
-                    attendance_pct = round(present_count / total_students * 100, 1) if total_students else 0
+                    known = set(df["Roll No"].astype(str))
+                    new_rows = [
+                        {"Roll No": str(d["roll_no"]), "Student Name": d["name"], "Department": d["department"]}
+                        for d in students_db.values()
+                        if str(d["roll_no"]) not in known
+                    ]
+                    if new_rows:
+                        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+
+                    if current_subject not in df.columns:
+                        df[current_subject] = "Absent"
+                    sub_cols = [c for c in df.columns if c not in BASE_COLS]
+                    df[sub_cols] = df[sub_cols].fillna("Absent")
+
+                    df.loc[df["Roll No"].astype(str) == str(st_info["roll_no"]), current_subject] = "Present"
+                    df.to_excel(excel_file, index=False)
+
+                    total_students = len(df)
+                    present_count = int((df[current_subject] == "Present").sum())
+                    pct = round(present_count / total_students * 100, 1) if total_students else 0
 
                     status_card.markdown(
                         f"""
@@ -464,11 +505,13 @@ elif page == "live":
   <div class="row"><span>Roll number</span><b>{st_info['roll_no']}</b></div>
   <div class="row"><span>Subject</span><b>{current_subject}</b></div>
   <div class="row"><span>Time</span><b>{time_str} · {date_str}</b></div>
-  <div class="row"><span>Class so far</span><b>{present_count}/{total_students} present ({attendance_pct}%)</b></div>
+  <div class="row"><span>Class so far</span><b>{present_count}/{total_students} present ({pct}%)</b></div>
 </div>
 """,
                         unsafe_allow_html=True,
                     )
+                    with st.expander("See today's sheet"):
+                        st.dataframe(df, use_container_width=True, hide_index=True)
                 except Exception as e:
                     st.error(f"Could not mark attendance: {e}")
 
@@ -476,41 +519,61 @@ elif page == "live":
 # VIEW ATTENDANCE
 # ==================================================================
 elif page == "view":
-    page_header("View attendance", "Check a day's sheet or see each student's overall percentage.")
+    page_header("View attendance", "One sheet per date, with a separate column for every subject.")
 
-    excel_files = sorted([f for f in os.listdir(RECORDS_DIR) if f.endswith(".xlsx")], reverse=True)
+    excel_files = sorted([f for f in os.listdir(RECORDS_DIR) if re.match(DATE_FILE_RE, f)], reverse=True)
 
     if not excel_files:
         st.info("No attendance sheets yet. Take attendance first and the sheets will appear here.")
     else:
         tab_day, tab_student = st.tabs(["Daily sheet", "Student-wise percentage"])
 
+        def colour_status(val):
+            if val == "Present":
+                return "background-color: #DFF1EF; color: #0A5F5E; font-weight: 600"
+            if val == "Absent":
+                return "background-color: #FDF0DC; color: #9A5B00; font-weight: 600"
+            return ""
+
         with tab_day:
-            selected_file = st.selectbox("Sheet", excel_files)
+            dates = [f[len("Attendance_"):-len(".xlsx")] for f in excel_files]
+            sel_date = st.selectbox("Date", dates)
+            selected_file = f"Attendance_{sel_date}.xlsx"
             file_path = os.path.join(RECORDS_DIR, selected_file)
-            df = pd.read_excel(file_path)
+            df = pd.read_excel(file_path, dtype={"Roll No": str})
+            sub_cols = [c for c in df.columns if c not in BASE_COLS]
 
-            total_st = len(df)
-            present_st = int((df["Status"] == "Present").sum())
-            absent_st = int((df["Status"] == "Absent").sum())
-            pct = round(present_st / total_st * 100, 1) if total_st else 0
+            m1, m2 = st.columns(2)
+            m1.metric("Students", len(df))
+            m2.metric("Subjects taken", len(sub_cols))
 
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Students", total_st)
-            m2.metric("Present", present_st)
-            m3.metric("Absent", absent_st)
-            m4.metric("Attendance", f"{pct}%")
-            st.progress(min(pct / 100, 1.0))
+            if sub_cols:
+                summ = pd.DataFrame(
+                    [
+                        {
+                            "Subject": c,
+                            "Present": int((df[c] == "Present").sum()),
+                            "Absent": int((df[c] != "Present").sum()),
+                            "Attendance %": round((df[c] == "Present").mean() * 100, 1),
+                        }
+                        for c in sub_cols
+                    ]
+                )
+                st.markdown("#### Subject summary")
+                st.dataframe(
+                    summ,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Attendance %": st.column_config.ProgressColumn(
+                            "Attendance %", min_value=0, max_value=100, format="%.1f%%"
+                        )
+                    },
+                )
 
-            def colour_status(val):
-                if val == "Present":
-                    return "background-color: #DFF1EF; color: #0A5F5E; font-weight: 600"
-                if val == "Absent":
-                    return "background-color: #FDF0DC; color: #9A5B00; font-weight: 600"
-                return ""
-
+            st.markdown("#### Student sheet")
             st.dataframe(
-                df.style.map(colour_status, subset=["Status"]),
+                df.style.map(colour_status, subset=sub_cols) if sub_cols else df,
                 use_container_width=True,
                 hide_index=True,
             )
@@ -524,36 +587,48 @@ elif page == "view":
                 )
 
         with tab_student:
-            frames = []
+            records = []
             for fn in excel_files:
                 try:
-                    frames.append(pd.read_excel(os.path.join(RECORDS_DIR, fn)))
+                    d = pd.read_excel(os.path.join(RECORDS_DIR, fn), dtype={"Roll No": str})
                 except Exception:
-                    pass
-            all_df = pd.concat(frames, ignore_index=True)
+                    continue
+                for c in [c for c in d.columns if c not in BASE_COLS]:
+                    part = d[["Roll No", "Student Name"]].copy()
+                    part["Subject"] = c
+                    part["Present"] = (d[c] == "Present").astype(int)
+                    records.append(part)
 
-            subjects = sorted(all_df["Subject"].dropna().unique().tolist())
-            subj = st.selectbox("Subject", ["All subjects"] + subjects)
-            view = all_df if subj == "All subjects" else all_df[all_df["Subject"] == subj]
-
-            summary = (
-                view.groupby(["Roll No", "Student Name"])
-                .agg(
-                    Classes=("Status", "count"),
-                    Present=("Status", lambda s: int((s == "Present").sum())),
+            if not records:
+                st.info("No subject has been marked yet.")
+            else:
+                long_df = pd.concat(records, ignore_index=True)
+                agg = (
+                    long_df.groupby(["Roll No", "Student Name", "Subject"])["Present"]
+                    .mean()
+                    .mul(100)
+                    .round(1)
+                    .reset_index()
                 )
-                .reset_index()
-            )
-            summary["Attendance %"] = (summary["Present"] / summary["Classes"] * 100).round(1)
-            summary["Note"] = summary["Attendance %"].apply(lambda p: "Below 75%" if p < 75 else "OK")
+                out = agg.pivot_table(
+                    index=["Roll No", "Student Name"], columns="Subject", values="Present"
+                ).reset_index()
+                out.columns.name = None
+                overall = (
+                    long_df.groupby(["Roll No", "Student Name"])["Present"].mean().mul(100).round(1).reset_index()
+                )
+                overall = overall.rename(columns={"Present": "Overall %"})
+                out = out.merge(overall, on=["Roll No", "Student Name"])
+                out["Note"] = out["Overall %"].apply(lambda p: "Below 75%" if p < 75 else "OK")
 
-            st.dataframe(
-                summary,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Attendance %": st.column_config.ProgressColumn(
-                        "Attendance %", min_value=0, max_value=100, format="%.1f%%"
-                    )
-                },
-            )
+                st.caption("Each subject column shows the percentage of that subject's classes the student attended.")
+                pct_cols = [c for c in out.columns if c not in ("Roll No", "Student Name", "Note")]
+                st.dataframe(
+                    out,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        c: st.column_config.ProgressColumn(c, min_value=0, max_value=100, format="%.1f%%")
+                        for c in pct_cols
+                    },
+                )
