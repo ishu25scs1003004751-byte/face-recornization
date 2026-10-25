@@ -2,6 +2,9 @@ import os
 import re
 import json
 import base64
+import hashlib
+from io import BytesIO
+from PIL import Image
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -73,6 +76,62 @@ MODEL_NAME = "openai/gpt-oss-120b"
 
 def encode_image_to_base64(image_bytes):
     return base64.b64encode(image_bytes).decode("utf-8")
+
+
+VISION_MODEL = st.secrets.get("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
+
+def to_data_url(image_bytes, max_side=640):
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    img.thumbnail((max_side, max_side))
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return "data:image/jpeg;base64," + encode_image_to_base64(buf.getvalue())
+
+
+def identify_student(live_bytes, students):
+    """Ask the Groq vision model which registered student is in the live photo.
+    Returns (roll_no or None, message). Registered photos are sent in batches of 4."""
+    cands = [s for s in students.values() if os.path.exists(s.get("image_path", ""))]
+    if not cands:
+        return None, "No registered photos to compare with. Select the student yourself."
+    live_url = to_data_url(live_bytes)
+    found = []
+    for i in range(0, len(cands), 4):
+        batch = cands[i:i + 4]
+        prompt = (
+            "You compare faces for a school attendance system. The LAST image is a live photo. "
+            "The earlier images are registered students, in this order: "
+            + "; ".join(f"image {n + 1} = roll {c['roll_no']}" for n, c in enumerate(batch))
+            + ". Decide whether the live photo shows the same person as one of the registered images. "
+            'Reply with JSON only: {"match": "<roll number or NONE>", "confidence": "high|medium|low"}'
+        )
+        content = [{"type": "text", "text": prompt}]
+        for c in batch:
+            with open(c["image_path"], "rb") as f:
+                content.append({"type": "image_url", "image_url": {"url": to_data_url(f.read())}})
+        content.append({"type": "image_url", "image_url": {"url": live_url}})
+        resp = client.chat.completions.create(
+            model=VISION_MODEL, messages=[{"role": "user", "content": content}], temperature=0, max_tokens=100
+        )
+        m = re.search(r"\{.*?\}", resp.choices[0].message.content or "", re.S)
+        if not m:
+            continue
+        try:
+            data = json.loads(m.group(0))
+        except ValueError:
+            continue
+        roll = str(data.get("match", "NONE")).strip()
+        conf = str(data.get("confidence", "")).lower()
+        if roll in students and conf in ("high", "medium"):
+            found.append((roll, conf))
+
+    highs = [r for r, c in found if c == "high"]
+    pick = highs[0] if len(highs) == 1 else (found[0][0] if len(found) == 1 else None)
+    if pick:
+        conf = dict(found)[pick]
+        return pick, f"AI suggestion: {students[pick]['name']} ({conf} confidence). Please confirm."
+    return None, "The AI could not find a confident match. Select the student yourself."
 
 
 # ------------------------------------------------------------------
@@ -386,22 +445,25 @@ elif page == "register":
 # LIVE ATTENDANCE
 # ==================================================================
 elif page == "live":
-    page_header("Live attendance", "Choose the subject, take the photo, then press Mark present.")
+    page_header("Live attendance", "Choose the subject, take the photo, confirm the student, then mark present.")
 
     subjects = load_subjects()
     now = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     PICK = "— Choose a subject —"
     NONE_OPT = "— None —"
+    PICK_STUDENT = "— Select student —"
 
-    if "cam_n" not in st.session_state:
-        st.session_state.cam_n = 0
-    if "last_result" not in st.session_state:
-        st.session_state.last_result = None
+    for k, v in (("cam_n", 0), ("last_result", None), ("ai_sig", None), ("ai_note", "")):
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-    # A subject added a moment ago becomes the selected one on this run
     if "pending_subject" in st.session_state:
         st.session_state["live_subject"] = st.session_state.pop("pending_subject")
+    if st.session_state.pop("reset_student", False):
+        st.session_state["live_student"] = PICK_STUDENT
+        st.session_state.ai_sig = None
+        st.session_state.ai_note = ""
     if st.session_state.get("live_subject") not in [PICK] + subjects:
         st.session_state["live_subject"] = PICK
     if st.session_state.get("rm_sub") not in [NONE_OPT] + subjects:
@@ -433,7 +495,6 @@ elif page == "live":
                 save_subjects(subjects)
                 st.session_state["pending_subject"] = name
                 st.rerun()
-
         if subjects:
             r1, r2 = st.columns([3, 1], vertical_alignment="bottom")
             with r1:
@@ -449,20 +510,52 @@ elif page == "live":
     col_cam, col_info = st.columns([1.2, 1], gap="large")
 
     with col_cam:
-        card_start("Camera", "Take the student's photo, then press Mark present.")
+        card_start("Camera", "Take the student's photo.")
         live_photo = st.camera_input(
             "Scan face", label_visibility="collapsed", key=f"live_cam_{st.session_state.cam_n}"
         )
         card_end()
-        mark_clicked = st.button("Mark present", key="mark_btn")
+
+        # Run the AI check once for every new photo
+        if live_photo is not None and students_db:
+            photo_bytes = live_photo.getvalue()
+            sig = hashlib.md5(photo_bytes).hexdigest()
+            if st.session_state.ai_sig != sig:
+                st.session_state.ai_sig = sig
+                with st.spinner("Identifying the student..."):
+                    try:
+                        roll, note = identify_student(photo_bytes, students_db)
+                    except Exception as e:
+                        roll, note = None, f"The AI check did not work ({e}). Select the student yourself."
+                st.session_state["live_student"] = roll if roll else PICK_STUDENT
+                st.session_state.ai_note = note
+
+    if st.session_state.get("live_student") not in [PICK_STUDENT] + list(students_db):
+        st.session_state["live_student"] = PICK_STUDENT
 
     with col_info:
+        card_start("Student", "Check who this is. Change it if the suggestion is wrong.")
+        if live_photo is not None and st.session_state.ai_note:
+            st.caption(st.session_state.ai_note)
+        chosen = st.selectbox(
+            "Student",
+            [PICK_STUDENT] + list(students_db),
+            key="live_student",
+            format_func=lambda r: r if r == PICK_STUDENT else f"{students_db[r]['name']} ({r})",
+            label_visibility="collapsed",
+        )
+        chosen_roll = None if chosen == PICK_STUDENT else chosen
+        if chosen_roll and os.path.exists(students_db[chosen_roll].get("image_path", "")):
+            st.image(students_db[chosen_roll]["image_path"], width=110, caption="Registered photo")
+        card_end()
+        mark_clicked = st.button("Mark present", key="mark_btn")
+
         st.markdown("#### Result")
         if st.session_state.last_result:
             st.markdown(st.session_state.last_result, unsafe_allow_html=True)
         else:
             st.markdown(
-                '<div class="result-wait">Take a photo and press Mark present. The result will show up here.</div>',
+                '<div class="result-wait">Take a photo, check the student, then press Mark present.</div>',
                 unsafe_allow_html=True,
             )
 
@@ -472,16 +565,15 @@ elif page == "live":
             st.error("Choose a subject first.")
         elif live_photo is None:
             st.error("Take the student's photo first.")
-        elif not students_db:
-            st.warning("No students yet. Register a student first.")
+        elif not chosen_roll:
+            st.error("Select which student this is.")
         else:
             try:
-                latest_roll = list(students_db.keys())[-1]
-                st_info = students_db[latest_roll]
+                st_info = students_db[chosen_roll]
                 time_str = now.strftime("%H:%M:%S")
                 excel_file = os.path.join(RECORDS_DIR, f"Attendance_{date_str}.xlsx")
 
-                # One sheet per date: student rows, one column per subject
+                # One sheet per date: a row per student, a column per subject
                 if os.path.exists(excel_file):
                     df = pd.read_excel(excel_file, dtype={"Roll No": str})
                 else:
@@ -501,24 +593,28 @@ elif page == "live":
                 sub_cols = [c for c in df.columns if c not in BASE_COLS]
                 df[sub_cols] = df[sub_cols].fillna("Absent")
 
-                df.loc[df["Roll No"].astype(str) == str(st_info["roll_no"]), current_subject] = "Present"
+                row = df["Roll No"].astype(str) == str(st_info["roll_no"])
+                already = bool((df.loc[row, current_subject] == "Present").any())
+                df.loc[row, current_subject] = "Present"
                 df.to_excel(excel_file, index=False)
 
                 total_students = len(df)
                 present_count = int((df[current_subject] == "Present").sum())
                 pct = round(present_count / total_students * 100, 1) if total_students else 0
+                heading = "Already marked present" if already else "Marked present"
 
                 st.session_state.last_result = f"""
 <div class="result-ok">
-  <h3>✓ Marked present</h3>
+  <h3>✓ {heading}</h3>
   <div class="row"><span>Name</span><b>{st_info['name']}</b></div>
   <div class="row"><span>Roll number</span><b>{st_info['roll_no']}</b></div>
   <div class="row"><span>Subject</span><b>{current_subject}</b></div>
-  <div class="row"><span>Time</span><b>{time_str} · {date_str}</b></div>
-  <div class="row"><span>Class so far</span><b>{present_count}/{total_students} present ({pct}%)</b></div>
+  <div class="row"><span>Date and time</span><b>{date_str} · {time_str}</b></div>
+  <div class="row"><span>{current_subject} so far</span><b>{present_count}/{total_students} present ({pct}%)</b></div>
 </div>
 """
-                st.session_state.cam_n += 1  # fresh camera for the next student
+                st.session_state.cam_n += 1
+                st.session_state["reset_student"] = True
                 marked_ok = True
             except Exception as e:
                 st.error(f"Could not mark attendance: {e}")
@@ -527,7 +623,7 @@ elif page == "live":
 
     today_file = os.path.join(RECORDS_DIR, f"Attendance_{date_str}.xlsx")
     if os.path.exists(today_file):
-        with st.expander("Today's sheet"):
+        with st.expander("Today's sheet", expanded=True):
             st.dataframe(
                 pd.read_excel(today_file, dtype={"Roll No": str}), use_container_width=True, hide_index=True
             )
@@ -536,28 +632,36 @@ elif page == "live":
 # VIEW ATTENDANCE
 # ==================================================================
 elif page == "view":
-    page_header("View attendance", "One sheet per date, with a separate column for every subject.")
+    page_header("View attendance", "See any date, any subject, or any student's overall percentage.")
 
-    excel_files = sorted([f for f in os.listdir(RECORDS_DIR) if re.match(DATE_FILE_RE, f)], reverse=True)
+    excel_files = sorted([f for f in os.listdir(RECORDS_DIR) if re.match(DATE_FILE_RE, f)])
+
+    def file_date(fn):
+        return fn[len("Attendance_"):-len(".xlsx")]
+
+    def read_sheet(fn):
+        d = pd.read_excel(os.path.join(RECORDS_DIR, fn), dtype={"Roll No": str})
+        return d.drop_duplicates(subset=["Roll No"])
+
+    def colour_status(val):
+        if val == "Present":
+            return "background-color: #DFF1EF; color: #0A5F5E; font-weight: 600"
+        if val == "Absent":
+            return "background-color: #FDF0DC; color: #9A5B00; font-weight: 600"
+        return ""
 
     if not excel_files:
         st.info("No attendance sheets yet. Take attendance first and the sheets will appear here.")
     else:
-        tab_day, tab_student = st.tabs(["Daily sheet", "Student-wise percentage"])
+        tab_day, tab_subject, tab_student = st.tabs(
+            ["By date", "By subject (date-wise)", "Student-wise percentage"]
+        )
 
-        def colour_status(val):
-            if val == "Present":
-                return "background-color: #DFF1EF; color: #0A5F5E; font-weight: 600"
-            if val == "Absent":
-                return "background-color: #FDF0DC; color: #9A5B00; font-weight: 600"
-            return ""
-
+        # ---- By date: one sheet, every subject as a column ----
         with tab_day:
-            dates = [f[len("Attendance_"):-len(".xlsx")] for f in excel_files]
-            sel_date = st.selectbox("Date", dates)
+            sel_date = st.selectbox("Date", [file_date(f) for f in reversed(excel_files)])
             selected_file = f"Attendance_{sel_date}.xlsx"
-            file_path = os.path.join(RECORDS_DIR, selected_file)
-            df = pd.read_excel(file_path, dtype={"Roll No": str})
+            df = read_sheet(selected_file)
             sub_cols = [c for c in df.columns if c not in BASE_COLS]
 
             m1, m2 = st.columns(2)
@@ -594,22 +698,68 @@ elif page == "view":
                 use_container_width=True,
                 hide_index=True,
             )
-
-            with open(file_path, "rb") as f:
+            with open(os.path.join(RECORDS_DIR, selected_file), "rb") as f:
                 st.download_button(
-                    label="Download Excel",
+                    "Download this date's Excel",
                     data=f.read(),
                     file_name=selected_file,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
 
+        # ---- By subject: students down the side, dates across ----
+        with tab_subject:
+            all_subjects = sorted(
+                {
+                    c
+                    for fn in excel_files
+                    for c in pd.read_excel(os.path.join(RECORDS_DIR, fn), nrows=0).columns
+                    if c not in BASE_COLS
+                }
+            )
+            if not all_subjects:
+                st.info("No subject has been marked yet.")
+            else:
+                subj = st.selectbox("Subject", all_subjects, key="view_subject")
+                frames = []
+                for fn in excel_files:
+                    d = read_sheet(fn)
+                    if subj in d.columns:
+                        part = d[["Roll No", "Student Name", subj]].rename(columns={subj: file_date(fn)})
+                        frames.append(part.set_index(["Roll No", "Student Name"]))
+
+                grid = pd.concat(frames, axis=1).fillna("-")
+                date_cols = list(grid.columns)
+                grid["Present"] = (grid[date_cols] == "Present").sum(axis=1)
+                grid["Classes"] = grid[date_cols].isin(["Present", "Absent"]).sum(axis=1)
+                grid["Attendance %"] = (grid["Present"] / grid["Classes"].where(grid["Classes"] > 0) * 100).round(1)
+                grid["Attendance %"] = grid["Attendance %"].fillna(0.0)
+                grid = grid.reset_index()
+
+                st.caption(f"{subj}: {len(date_cols)} date(s) recorded. A dash means the student had no row on that date.")
+                st.dataframe(
+                    grid.style.map(colour_status, subset=date_cols),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Attendance %": st.column_config.ProgressColumn(
+                            "Attendance %", min_value=0, max_value=100, format="%.1f%%"
+                        )
+                    },
+                )
+                buf = BytesIO()
+                grid.to_excel(buf, index=False)
+                st.download_button(
+                    f"Download {subj} report",
+                    data=buf.getvalue(),
+                    file_name=f"{subj.replace(' ', '_')}_datewise.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+        # ---- Student-wise percentage across all subjects ----
         with tab_student:
             records = []
             for fn in excel_files:
-                try:
-                    d = pd.read_excel(os.path.join(RECORDS_DIR, fn), dtype={"Roll No": str})
-                except Exception:
-                    continue
+                d = read_sheet(fn)
                 for c in [c for c in d.columns if c not in BASE_COLS]:
                     part = d[["Roll No", "Student Name"]].copy()
                     part["Subject"] = c
@@ -622,10 +772,7 @@ elif page == "view":
                 long_df = pd.concat(records, ignore_index=True)
                 agg = (
                     long_df.groupby(["Roll No", "Student Name", "Subject"])["Present"]
-                    .mean()
-                    .mul(100)
-                    .round(1)
-                    .reset_index()
+                    .mean().mul(100).round(1).reset_index()
                 )
                 out = agg.pivot_table(
                     index=["Roll No", "Student Name"], columns="Subject", values="Present"
@@ -633,8 +780,7 @@ elif page == "view":
                 out.columns.name = None
                 overall = (
                     long_df.groupby(["Roll No", "Student Name"])["Present"].mean().mul(100).round(1).reset_index()
-                )
-                overall = overall.rename(columns={"Present": "Overall %"})
+                ).rename(columns={"Present": "Overall %"})
                 out = out.merge(overall, on=["Roll No", "Student Name"])
                 out["Note"] = out["Overall %"].apply(lambda p: "Below 75%" if p < 75 else "OK")
 
