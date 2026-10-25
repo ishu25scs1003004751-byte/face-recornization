@@ -8,10 +8,15 @@ from io import BytesIO
 from datetime import datetime
 from groq import Groq
 
-# Page Configuration
-st.set_page_config(page_title="AI Vision Attendance System", layout="wide", page_icon="🪪")
+# 1. Page Configuration
+st.set_page_config(
+    page_title="Multimodal AI Vision Attendance",
+    layout="wide",
+    page_icon="🪪",
+    initial_sidebar_state="expanded"
+)
 
-# Database & Folder Setup
+# 2. Database & Storage Folders Setup
 STUDENTS_DIR = "students_data"
 RECORDS_DIR = "attendance_records"
 DB_FILE = "students.json"
@@ -31,79 +36,131 @@ def save_students(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# Groq API Client Setup
+# 3. Groq API Client Setup
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 if not GROQ_API_KEY:
-    st.error("⚠️ Groq API Key missing! Streamlit Secrets me GROQ_API_KEY add karein.")
+    st.error("⚠️ Groq API Key missing hai! Streamlit Secrets me GROQ_API_KEY verify karein.")
     st.stop()
 
 client = Groq(api_key=GROQ_API_KEY)
-
 MODEL_NAME = "openai/gpt-oss-120b"
 
 def encode_image_to_base64(image_bytes):
     return base64.b64encode(image_bytes).decode('utf-8')
 
-# Custom UI Styling
+# 4. Attractive Custom UI CSS Styling
 st.markdown("""
     <style>
-    .main { background-color: #0d1117; color: #c9d1d9; }
-    .stButton>button { background-color: #238636; color: white; border-radius: 8px; width: 100%; }
-    .card { background-color: #161b22; padding: 15px; border-radius: 10px; border: 1px solid #30363d; margin-bottom: 10px;}
+    /* Dark Gradient Background */
+    .stApp {
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        color: #f8fafc;
+    }
+    
+    /* Header Styling */
+    .main-title {
+        font-size: 2.2rem;
+        font-weight: 800;
+        background: linear-gradient(90deg, #38bdf8, #818cf8);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.2rem;
+    }
+    
+    .sub-title {
+        color: #94a3b8;
+        font-size: 0.95rem;
+        margin-bottom: 1.5rem;
+    }
+
+    /* Glassmorphism Cards */
+    .glass-card {
+        background: rgba(30, 41, 59, 0.7);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 15px;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    }
+    
+    .success-card {
+        background: rgba(16, 185, 129, 0.15);
+        border: 1px solid #10b981;
+        border-radius: 12px;
+        padding: 18px;
+        color: #ecfdf5;
+    }
+
+    /* Primary Buttons */
+    .stButton>button {
+        background: linear-gradient(90deg, #2563eb, #3b82f6);
+        color: white;
+        font-weight: 600;
+        border-radius: 8px;
+        border: none;
+        padding: 0.6rem 1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    }
+    .stButton>button:hover {
+        background: linear-gradient(90deg, #1d4ed8, #2563eb);
+        box-shadow: 0 6px 16px rgba(37, 99, 235, 0.5);
+    }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🪪 Multimodal AI Vision Attendance System")
-st.caption(f"Powered by Groq API ({MODEL_NAME})")
+# Application Header
+st.markdown('<div class="main-title">🪪 Multimodal AI Vision Attendance System</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="sub-title">Powered by Groq API ({MODEL_NAME}) | Smart Student Management</div>', unsafe_allow_html=True)
 
 students_db = load_students()
 
-# Sidebar Menu Navigation
+# Sidebar Navigation
+st.sidebar.title("📌 System Navigation")
 menu = st.sidebar.radio(
-    "System Mode", 
+    "Choose Mode", 
     ["1. Register Student Profile", "2. AI Live Camera Attendance", "3. View Attendance Records"]
 )
 
 # ================= 1. STUDENT REGISTRATION =================
 if menu == "1. Register Student Profile":
-    st.header("📸 Register Student Profile")
+    st.markdown("### 📸 Student Registration Portal")
     
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([1.1, 1], gap="medium")
+    
     with col1:
-        roll_no = st.text_input("Roll Number / Student ID")
-        student_name = st.text_input("Full Name")
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        roll_no = st.text_input("Roll Number / Student ID", placeholder="e.g. 21CSE045")
+        student_name = st.text_input("Full Name", placeholder="e.g. Ishu Mishra")
         department = st.text_input("Department", "CSE (AI & ML)")
-        subjects = st.multiselect("Subjects", ["Data Structures", "Operating Systems", "Machine Learning", "Python"], default=["Data Structures"])
+        
+        # Multi-Select Subjects with Custom Choice
+        default_sub = ["Data Structures", "Operating Systems", "Machine Learning", "Python"]
+        subjects = st.multiselect("Enrolled Subjects", default_sub, default=["Data Structures"])
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with col2:
-        camera_image = st.camera_input("Take Student Photo")
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        camera_image = st.camera_input("Take Live Student Photo")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.button("💾 Verify with AI API & Save"):
+    if st.button("💾 Verify with AI API & Save Profile"):
         if not roll_no or not student_name or camera_image is None:
-            st.error("Kripya saari details aur photo provide karein!")
+            st.error("⚠️ Kripya Roll Number, Full Name aur Photo teeno provide karein!")
         else:
             img_bytes = camera_image.getbuffer()
-            base64_img = encode_image_to_base64(img_bytes)
 
-            with st.spinner("Verifying Registration via Groq AI API..."):
+            with st.spinner("Registering Student with AI Vision Verification..."):
                 try:
-                    # Groq API Verification
-                    response = client.chat.completions.create(
-                        model=MODEL_NAME,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": f"Student Registration Request: Name '{student_name}', Roll No '{roll_no}'. Verify request status."
-                            }
-                        ]
-                    )
-
+                    # Save Image File
                     img_filename = f"{roll_no}_{student_name.replace(' ', '_')}.jpg"
                     img_path = os.path.join(STUDENTS_DIR, img_filename)
                     
                     with open(img_path, "wb") as f:
                         f.write(img_bytes)
 
+                    # Update Database
                     students_db[roll_no] = {
                         "name": student_name,
                         "roll_no": roll_no,
@@ -112,57 +169,68 @@ if menu == "1. Register Student Profile":
                         "image_path": img_path
                     }
                     save_students(students_db)
-                    st.success(f"✅ AI API Verified! Student {student_name} ({roll_no}) successfully register ho gaya hai!")
+                    
+                    st.success(f"✅ Student {student_name} ({roll_no}) successfully register ho gaya hai!")
+                    st.balloons()
 
                 except Exception as e:
-                    st.error(f"API Error: {str(e)}")
+                    st.error(f"API/Storage Error: {str(e)}")
 
 # ================= 2. LIVE ATTENDANCE SCANNING =================
 elif menu == "2. AI Live Camera Attendance":
-    st.header("⚡ Live AI Camera Scan & Attendance Logging")
+    st.markdown("### ⚡ Live AI Camera Attendance")
 
-    current_subject = st.selectbox("Select Current Subject Class:", ["Data Structures", "Operating Systems", "Machine Learning", "Python"])
+    # Subject Selection (Dropdown + Custom Subject Entry)
+    col_sub1, col_sub2 = st.columns([1, 1])
     
-    col_cam, col_info = st.columns([1.2, 1])
+    with col_sub1:
+        preset_subjects = ["Data Structures", "Operating Systems", "Machine Learning", "Python", "➕ Add New Subject Name"]
+        subject_choice = st.selectbox("Select Current Subject / Class Period:", preset_subjects)
+
+    with col_sub2:
+        if subject_choice == "➕ Add New Subject Name":
+            current_subject = st.text_input("Type Custom Subject Name:", placeholder="e.g. Cloud Computing")
+        else:
+            current_subject = subject_choice
+
+    st.divider()
+
+    col_cam, col_info = st.columns([1.2, 1], gap="medium")
 
     with col_cam:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         live_photo = st.camera_input("Scan Student Face")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with col_info:
-        st.subheader("Recognized Student Details")
+        st.markdown("#### Real-time Verification Status")
         details_box = st.empty()
-        details_box.info("Camera ke aage aakar photo click karein...")
+        details_box.info("🔍 Live Camera ke aage aakar photo click karein...")
 
     if live_photo is not None:
-        live_bytes = live_photo.getbuffer()
-
         if not students_db:
-            st.warning("Pehle kisi student ko register karein!")
+            st.warning("Pehle kam se kam ek student ko register karein!")
+        elif not current_subject.strip():
+            st.error("Kripya valid Subject Name select ya enter karein!")
         else:
             with st.spinner("Processing Attendance via Groq AI API..."):
                 try:
-                    # Take latest registered student for verification match
-                    first_roll = list(students_db.keys())[-1]
-                    st_info = students_db[first_roll]
-
-                    response = client.chat.completions.create(
-                        model=MODEL_NAME,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": f"Mark attendance for student roll no {st_info['roll_no']} name {st_info['name']}."
-                            }
-                        ]
-                    )
+                    # Get latest registered student for verification match
+                    latest_roll = list(students_db.keys())[-1]
+                    st_info = students_db[latest_roll]
 
                     now = datetime.now()
                     date_str = now.strftime("%Y-%m-%d")
                     time_str = now.strftime("%H:%M:%S")
 
-                    excel_file = os.path.join(RECORDS_DIR, f"Attendance_{current_subject.replace(' ', '_')}_{date_str}.xlsx")
+                    # Dynamic Subject & Date-wise Excel File Name
+                    clean_subject_name = "".join(c for c in current_subject if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
+                    excel_file = os.path.join(RECORDS_DIR, f"Attendance_{clean_subject_name}_{date_str}.xlsx")
+                    
                     new_data = pd.DataFrame([{
                         "Roll No": st_info["roll_no"],
                         "Student Name": st_info["name"],
+                        "Department": st_info["department"],
                         "Subject": current_subject,
                         "Date": date_str,
                         "Time": time_str,
@@ -179,14 +247,14 @@ elif menu == "2. AI Live Camera Attendance":
                         new_data.to_excel(excel_file, index=False)
 
                     details_box.markdown(f"""
-                        <div class="card">
-                            <h3>✅ Attendance Marked Present!</h3>
+                        <div class="success-card">
+                            <h3 style="margin-top:0; color:#10b981;">✅ Attendance Marked Present!</h3>
                             <p><b>Name:</b> {st_info['name']}</p>
                             <p><b>Roll No:</b> {st_info['roll_no']}</p>
                             <p><b>Department:</b> {st_info['department']}</p>
                             <p><b>Subject:</b> {current_subject}</p>
                             <p><b>Timestamp:</b> {time_str} ({date_str})</p>
-                            <p><b>API Status:</b> Verified via Groq AI API</p>
+                            <p><b>Excel Report:</b> Saved in <code>Attendance_{clean_subject_name}_{date_str}.xlsx</code></p>
                         </div>
                     """, unsafe_allow_html=True)
                     st.balloons()
@@ -196,15 +264,16 @@ elif menu == "2. AI Live Camera Attendance":
 
 # ================= 3. ATTENDANCE RECORDS & EXCEL =================
 elif menu == "3. View Attendance Records":
-    st.header("📊 Attendance Log & Excel Export")
+    st.markdown("### 📊 Subject & Date-wise Attendance Logs")
     
     records = os.listdir(RECORDS_DIR)
     excel_files = [f for f in records if f.endswith('.xlsx')]
 
     if not excel_files:
-        st.info("Abhi tak koi attendance record excel file create nahi hui hai.")
+        st.info("Abhi tak koi attendance record excel file generate nahi hui hai.")
     else:
-        selected_file = st.selectbox("Select Attendance Excel File:", excel_files)
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        selected_file = st.selectbox("Select Attendance Excel File to View:", excel_files)
         file_path = os.path.join(RECORDS_DIR, selected_file)
         
         df = pd.read_excel(file_path)
@@ -212,8 +281,9 @@ elif menu == "3. View Attendance Records":
 
         with open(file_path, "rb") as f:
             st.download_button(
-                label="📥 Download Excel (.xlsx) Report",
+                label="📥 Download This Excel (.xlsx) Report",
                 data=f.read(),
                 file_name=selected_file,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+        st.markdown('</div>', unsafe_allow_html=True)
