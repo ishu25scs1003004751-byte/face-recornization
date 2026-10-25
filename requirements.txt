@@ -1,7 +1,5 @@
 streamlit
-opencv-python-headless
-numpy
+groq
+pillow
 pandas
 openpyxl
-face-recognition
-cmake
