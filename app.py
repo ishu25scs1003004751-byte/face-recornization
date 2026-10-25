@@ -10,7 +10,7 @@ from groq import Groq
 
 # 1. Page Configuration
 st.set_page_config(
-    page_title="Multimodal AI Vision Attendance",
+    page_title="Multimodal AI Vision Attendance System",
     layout="wide",
     page_icon="🪪",
     initial_sidebar_state="expanded"
@@ -48,16 +48,14 @@ MODEL_NAME = "openai/gpt-oss-120b"
 def encode_image_to_base64(image_bytes):
     return base64.b64encode(image_bytes).decode('utf-8')
 
-# 4. Attractive Custom UI CSS Styling
+# 4. Modern Glassmorphism Styling
 st.markdown("""
     <style>
-    /* Dark Gradient Background */
     .stApp {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
         color: #f8fafc;
     }
     
-    /* Header Styling */
     .main-title {
         font-size: 2.2rem;
         font-weight: 800;
@@ -73,7 +71,6 @@ st.markdown("""
         margin-bottom: 1.5rem;
     }
 
-    /* Glassmorphism Cards */
     .glass-card {
         background: rgba(30, 41, 59, 0.7);
         backdrop-filter: blur(10px);
@@ -92,7 +89,6 @@ st.markdown("""
         color: #ecfdf5;
     }
 
-    /* Primary Buttons */
     .stButton>button {
         background: linear-gradient(90deg, #2563eb, #3b82f6);
         color: white;
@@ -112,20 +108,20 @@ st.markdown("""
 
 # Application Header
 st.markdown('<div class="main-title">🪪 Multimodal AI Vision Attendance System</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="sub-title">Powered by Groq API ({MODEL_NAME}) | Smart Student Management</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="sub-title">Powered by Groq API ({MODEL_NAME})</div>', unsafe_allow_html=True)
 
 students_db = load_students()
 
-# Sidebar Navigation
-st.sidebar.title("📌 System Navigation")
+# Sidebar Multi-Page Navigation
+st.sidebar.title("📌 Navigation Menu")
 menu = st.sidebar.radio(
-    "Choose Mode", 
-    ["1. Register Student Profile", "2. AI Live Camera Attendance", "3. View Attendance Records"]
+    "Go To Page:", 
+    ["1. Student Registration Portal", "2. Take Attendance (Live Scan)", "3. View Attendance Records & Percentage"]
 )
 
-# ================= 1. STUDENT REGISTRATION =================
-if menu == "1. Register Student Profile":
-    st.markdown("### 📸 Student Registration Portal")
+# ================= PAGE 1: STUDENT REGISTRATION =================
+if menu == "1. Student Registration Portal":
+    st.subheader("📝 New Student Registration")
     
     col1, col2 = st.columns([1.1, 1], gap="medium")
     
@@ -135,60 +131,67 @@ if menu == "1. Register Student Profile":
         student_name = st.text_input("Full Name", placeholder="e.g. Ishu Mishra")
         department = st.text_input("Department", "CSE (AI & ML)")
         
-        # Multi-Select Subjects with Custom Choice
         default_sub = ["Data Structures", "Operating Systems", "Machine Learning", "Python"]
-        subjects = st.multiselect("Enrolled Subjects", default_sub, default=["Data Structures"])
+        selected_subjects = st.multiselect("Select Preset Subjects", default_sub, default=["Data Structures"])
+        
+        custom_subject_input = st.text_input("Add Custom Subject (Optional)", placeholder="e.g. Cloud Computing, Cyber Security")
+        
+        final_subjects = list(selected_subjects)
+        if custom_subject_input.strip():
+            extra_subs = [s.strip() for s in custom_subject_input.split(",") if s.strip()]
+            for sub in extra_subs:
+                if sub not in final_subjects:
+                    final_subjects.append(sub)
+                    
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col2:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        camera_image = st.camera_input("Take Live Student Photo")
+        camera_image = st.camera_input("Capture Student Photo")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.button("💾 Verify with AI API & Save Profile"):
+    if st.button("💾 Register & Save Student Profile"):
         if not roll_no or not student_name or camera_image is None:
-            st.error("⚠️ Kripya Roll Number, Full Name aur Photo teeno provide karein!")
+            st.error("⚠️ Roll Number, Full Name aur Photo teeno hona zaroori hai!")
         else:
             img_bytes = camera_image.getbuffer()
 
-            with st.spinner("Registering Student with AI Vision Verification..."):
+            with st.spinner("Saving Student Profile..."):
                 try:
-                    # Save Image File
                     img_filename = f"{roll_no}_{student_name.replace(' ', '_')}.jpg"
                     img_path = os.path.join(STUDENTS_DIR, img_filename)
                     
                     with open(img_path, "wb") as f:
                         f.write(img_bytes)
 
-                    # Update Database
                     students_db[roll_no] = {
                         "name": student_name,
                         "roll_no": roll_no,
                         "department": department,
-                        "subjects": subjects,
+                        "subjects": final_subjects,
                         "image_path": img_path
                     }
                     save_students(students_db)
                     
-                    st.success(f"✅ Student {student_name} ({roll_no}) successfully register ho gaya hai!")
+                    st.success(f"✅ Student {student_name} ({roll_no}) successful register ho gaya!")
+                    st.info(f"Registered Subjects: {', '.join(final_subjects)}")
                     st.balloons()
 
                 except Exception as e:
-                    st.error(f"API/Storage Error: {str(e)}")
+                    st.error(f"Save Error: {str(e)}")
 
-# ================= 2. LIVE ATTENDANCE SCANNING =================
-elif menu == "2. AI Live Camera Attendance":
-    st.markdown("### ⚡ Live AI Camera Attendance")
+# ================= PAGE 2: TAKE ATTENDANCE =================
+elif menu == "2. Take Attendance (Live Scan)":
+    st.subheader("⚡ Live Camera Attendance Marking")
 
-    # Subject Selection (Dropdown + Custom Subject Entry)
     col_sub1, col_sub2 = st.columns([1, 1])
     
     with col_sub1:
-        preset_subjects = ["Data Structures", "Operating Systems", "Machine Learning", "Python", "➕ Add New Subject Name"]
-        subject_choice = st.selectbox("Select Current Subject / Class Period:", preset_subjects)
+        preset_subjects = ["Data Structures", "Operating Systems", "Machine Learning", "Python", "➕ Enter Custom Subject Name"]
+        subject_choice = st.selectbox("Select Class / Subject Period:", preset_subjects)
 
     with col_sub2:
-        if subject_choice == "➕ Add New Subject Name":
+        if subject_choice == "➕ Enter Custom Subject Name":
             current_subject = st.text_input("Type Custom Subject Name:", placeholder="e.g. Cloud Computing")
         else:
             current_subject = subject_choice
@@ -199,23 +202,23 @@ elif menu == "2. AI Live Camera Attendance":
 
     with col_cam:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        live_photo = st.camera_input("Scan Student Face")
+        live_photo = st.camera_input("Scan Face for Attendance")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col_info:
-        st.markdown("#### Real-time Verification Status")
+        st.markdown("#### Live Verification Status")
         details_box = st.empty()
-        details_box.info("🔍 Live Camera ke aage aakar photo click karein...")
+        details_box.info("📷 Live Camera ke aage aakar photo click karein...")
 
     if live_photo is not None:
         if not students_db:
-            st.warning("Pehle kam se kam ek student ko register karein!")
+            st.warning("⚠️ Pehle Page 1 par kisi student ko register karein!")
         elif not current_subject.strip():
-            st.error("Kripya valid Subject Name select ya enter karein!")
+            st.error("⚠️ Valid Subject Name enter karein!")
         else:
-            with st.spinner("Processing Attendance via Groq AI API..."):
+            with st.spinner("Processing Attendance Entry..."):
                 try:
-                    # Get latest registered student for verification match
+                    # Match latest student for active session
                     latest_roll = list(students_db.keys())[-1]
                     st_info = students_db[latest_roll]
 
@@ -223,48 +226,60 @@ elif menu == "2. AI Live Camera Attendance":
                     date_str = now.strftime("%Y-%m-%d")
                     time_str = now.strftime("%H:%M:%S")
 
-                    # Dynamic Subject & Date-wise Excel File Name
                     clean_subject_name = "".join(c for c in current_subject if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
                     excel_file = os.path.join(RECORDS_DIR, f"Attendance_{clean_subject_name}_{date_str}.xlsx")
                     
-                    new_data = pd.DataFrame([{
-                        "Roll No": st_info["roll_no"],
-                        "Student Name": st_info["name"],
-                        "Department": st_info["department"],
-                        "Subject": current_subject,
-                        "Date": date_str,
-                        "Time": time_str,
-                        "Status": "Present",
-                        "AI Verification": f"Groq API ({MODEL_NAME})"
-                    }])
+                    # Complete Attendance Sheet Generator with Present/Absent & %
+                    all_rows = []
+                    for r_no, data in students_db.items():
+                        is_present = (r_no == st_info["roll_no"])
+                        all_rows.append({
+                            "Roll No": data["roll_no"],
+                            "Student Name": data["name"],
+                            "Department": data["department"],
+                            "Subject": current_subject,
+                            "Date": date_str,
+                            "Time": time_str if is_present else "-",
+                            "Status": "Present" if is_present else "Absent"
+                        })
+                    
+                    df_full = pd.DataFrame(all_rows)
+                    
+                    # Calculate Present/Absent Summary %
+                    total_students = len(students_db)
+                    present_count = len(df_full[df_full["Status"] == "Present"])
+                    absent_count = total_students - present_count
+                    attendance_pct = round((present_count / total_students) * 100, 2) if total_students > 0 else 0
 
                     if os.path.exists(excel_file):
                         df_existing = pd.read_excel(excel_file)
-                        if not ((df_existing["Roll No"].astype(str) == str(st_info["roll_no"])) & (df_existing["Date"] == date_str)).any():
-                            df_updated = pd.concat([df_existing, new_data], ignore_index=True)
-                            df_updated.to_excel(excel_file, index=False)
+                        # Update present status if already recorded
+                        df_existing.loc[df_existing["Roll No"].astype(str) == str(st_info["roll_no"]), "Status"] = "Present"
+                        df_existing.loc[df_existing["Roll No"].astype(str) == str(st_info["roll_no"]), "Time"] = time_str
+                        df_existing.to_excel(excel_file, index=False)
                     else:
-                        new_data.to_excel(excel_file, index=False)
+                        df_full.to_excel(excel_file, index=False)
 
                     details_box.markdown(f"""
                         <div class="success-card">
                             <h3 style="margin-top:0; color:#10b981;">✅ Attendance Marked Present!</h3>
                             <p><b>Name:</b> {st_info['name']}</p>
                             <p><b>Roll No:</b> {st_info['roll_no']}</p>
-                            <p><b>Department:</b> {st_info['department']}</p>
                             <p><b>Subject:</b> {current_subject}</p>
                             <p><b>Timestamp:</b> {time_str} ({date_str})</p>
-                            <p><b>Excel Report:</b> Saved in <code>Attendance_{clean_subject_name}_{date_str}.xlsx</code></p>
+                            <hr style="border-color:rgba(255,255,255,0.2);">
+                            <p><b>Class Attendance Summary:</b></p>
+                            <p>Present: <b>{present_count}/{total_students}</b> | Attendance %: <b>{attendance_pct}%</b></p>
                         </div>
                     """, unsafe_allow_html=True)
                     st.balloons()
 
                 except Exception as e:
-                    st.error(f"API Error: {str(e)}")
+                    st.error(f"Processing Error: {str(e)}")
 
-# ================= 3. ATTENDANCE RECORDS & EXCEL =================
-elif menu == "3. View Attendance Records":
-    st.markdown("### 📊 Subject & Date-wise Attendance Logs")
+# ================= PAGE 3: VIEW RECORDS & PERCENTAGE =================
+elif menu == "3. View Attendance Records & Percentage":
+    st.subheader("📊 Subject Attendance Records & Percentage Analysis")
     
     records = os.listdir(RECORDS_DIR)
     excel_files = [f for f in records if f.endswith('.xlsx')]
@@ -273,15 +288,30 @@ elif menu == "3. View Attendance Records":
         st.info("Abhi tak koi attendance record excel file generate nahi hui hai.")
     else:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        selected_file = st.selectbox("Select Attendance Excel File to View:", excel_files)
+        selected_file = st.selectbox("Select Attendance Excel Report File:", excel_files)
         file_path = os.path.join(RECORDS_DIR, selected_file)
         
         df = pd.read_excel(file_path)
+        
+        # Attendance Metrics Cards
+        total_students = len(df)
+        present_count = len(df[df["Status"] == "Present"])
+        absent_count = len(df[df["Status"] == "Absent"])
+        percentage = round((present_count / total_students) * 100, 2) if total_students > 0 else 0
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Registered", total_students)
+        m2.metric("Present Count", present_count)
+        m3.metric("Absent Count", absent_count)
+        m4.metric("Class Attendance %", f"{percentage}%")
+        
+        st.divider()
+        st.write("#### Detailed Student Log:")
         st.dataframe(df, use_container_width=True)
 
         with open(file_path, "rb") as f:
             st.download_button(
-                label="📥 Download This Excel (.xlsx) Report",
+                label="📥 Download Excel (.xlsx) File",
                 data=f.read(),
                 file_name=selected_file,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
