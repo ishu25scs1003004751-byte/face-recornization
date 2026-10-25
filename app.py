@@ -88,7 +88,7 @@ if menu == "1. Register Student Profile":
                 try:
                     # Vision API Call to verify face presence
                     response = client.chat.completions.create(
-                       model="llama-3.2-11b-vision-instruct"
+                       model="llama-3.2-11b-vision-instruct",
                         messages=[{
                             "role": "user",
                             "content": [
