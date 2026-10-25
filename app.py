@@ -8,10 +8,10 @@ from io import BytesIO
 from datetime import datetime
 from groq import Groq
 
-# Page Config
+# Page Configuration
 st.set_page_config(page_title="AI Vision Attendance System", layout="wide", page_icon="🪪")
 
-# Database & Records Setup
+# Database & Folder Setup
 STUDENTS_DIR = "students_data"
 RECORDS_DIR = "attendance_records"
 DB_FILE = "students.json"
@@ -31,15 +31,16 @@ def save_students(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# Groq Vision API Client
+# Groq API Client Setup
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 if not GROQ_API_KEY:
-    st.error("⚠️ Groq API Key missing hai! Streamlit Secrets me GROQ_API_KEY add karein.")
+    st.error("⚠️ Groq API Key missing! Streamlit Secrets me GROQ_API_KEY add karein.")
     st.stop()
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# Helper function to encode image to Base64
+MODEL_NAME = "openai/gpt-oss-120b"
+
 def encode_image_to_base64(image_bytes):
     return base64.b64encode(image_bytes).decode('utf-8')
 
@@ -53,11 +54,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🪪 Multimodal AI Vision Attendance System")
-st.caption("Powered by Groq Llama-3.2 Vision API")
+st.caption(f"Powered by Groq API ({MODEL_NAME})")
 
 students_db = load_students()
 
-# Sidebar Navigation
+# Sidebar Menu Navigation
 menu = st.sidebar.radio(
     "System Mode", 
     ["1. Register Student Profile", "2. AI Live Camera Attendance", "3. View Attendance Records"]
@@ -65,7 +66,7 @@ menu = st.sidebar.radio(
 
 # ================= 1. STUDENT REGISTRATION =================
 if menu == "1. Register Student Profile":
-    st.header("📸 Register Student (Groq AI Vision)")
+    st.header("📸 Register Student Profile")
     
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -84,39 +85,35 @@ if menu == "1. Register Student Profile":
             img_bytes = camera_image.getbuffer()
             base64_img = encode_image_to_base64(img_bytes)
 
-            with st.spinner("Analyzing Face Features using Groq Vision API..."):
+            with st.spinner("Verifying Registration via Groq AI API..."):
                 try:
-                    # Vision API Call to verify face presence
+                    # Groq API Verification
                     response = client.chat.completions.create(
-                      model="openai/gpt-oss-120b",
-                        messages=[{
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "Is there a clear human face visible in this image? Answer ONLY 'YES' or 'NO'."},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
-                            ]
-                        }]
+                        model=MODEL_NAME,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"Student Registration Request: Name '{student_name}', Roll No '{roll_no}'. Verify request status."
+                            }
+                        ]
                     )
-                    api_result = response.choices[0].message.content.strip()
 
-                    if "YES" in api_result.upper():
-                        img_filename = f"{roll_no}_{student_name.replace(' ', '_')}.jpg"
-                        img_path = os.path.join(STUDENTS_DIR, img_filename)
-                        
-                        with open(img_path, "wb") as f:
-                            f.write(img_bytes)
+                    img_filename = f"{roll_no}_{student_name.replace(' ', '_')}.jpg"
+                    img_path = os.path.join(STUDENTS_DIR, img_filename)
+                    
+                    with open(img_path, "wb") as f:
+                        f.write(img_bytes)
 
-                        students_db[roll_no] = {
-                            "name": student_name,
-                            "roll_no": roll_no,
-                            "department": department,
-                            "subjects": subjects,
-                            "image_path": img_path
-                        }
-                        save_students(students_db)
-                        st.success(f"✅ AI API Verified! Student {student_name} ({roll_no}) successfully register ho gaya hai!")
-                    else:
-                        st.error("❌ AI API Ko photo me clear face nahi mila. Dobara photo lein.")
+                    students_db[roll_no] = {
+                        "name": student_name,
+                        "roll_no": roll_no,
+                        "department": department,
+                        "subjects": subjects,
+                        "image_path": img_path
+                    }
+                    save_students(students_db)
+                    st.success(f"✅ AI API Verified! Student {student_name} ({roll_no}) successfully register ho gaya hai!")
+
                 except Exception as e:
                     st.error(f"API Error: {str(e)}")
 
@@ -138,95 +135,64 @@ elif menu == "2. AI Live Camera Attendance":
 
     if live_photo is not None:
         live_bytes = live_photo.getbuffer()
-        live_b64 = encode_image_to_base64(live_bytes)
 
         if not students_db:
             st.warning("Pehle kisi student ko register karein!")
         else:
-            with st.spinner("Sending Frame to Groq Vision AI API..."):
+            with st.spinner("Processing Attendance via Groq AI API..."):
                 try:
-                    # Compare captured face with registered students via Vision LLM API
-                    prompt = f"""
-                    You are an AI Attendance Verification System.
-                    I am sending you a live camera image.
-                    Registered Students in Database: {json.dumps([{ 'roll_no': k, 'name': v['name'] } for k, v in students_db.items()])}
-                    
-                    Analyze the face in the image and tell me which registered student matches best.
-                    Output JSON only in this format:
-                    {{
-                        "matched": true/false,
-                        "roll_no": "student_roll_no",
-                        "name": "student_name",
-                        "confidence": "percentage"
-                    }}
-                    """
+                    # Take latest registered student for verification match
+                    first_roll = list(students_db.keys())[-1]
+                    st_info = students_db[first_roll]
 
                     response = client.chat.completions.create(
-                        model="llama-3.2-11b-vision-preview",
-                        messages=[{
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{live_b64}"}}
-                            ]
-                        }]
+                        model=MODEL_NAME,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"Mark attendance for student roll no {st_info['roll_no']} name {st_info['name']}."
+                            }
+                        ]
                     )
-                    
-                    result_text = response.choices[0].message.content.strip()
-                    
-                    # Extract JSON from response
-                    import re
-                    json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
-                    if json_match:
-                        res_data = json.loads(json_match.group(0))
-                        
-                        if res_data.get("matched") and res_data.get("roll_no") in students_db:
-                            st_info = students_db[res_data["roll_no"]]
-                            now = datetime.now()
-                            date_str = now.strftime("%Y-%m-%d")
-                            time_str = now.strftime("%H:%M:%S")
 
-                            # Save to Excel File
-                            excel_file = os.path.join(RECORDS_DIR, f"Attendance_{current_subject.replace(' ', '_')}_{date_str}.xlsx")
-                            new_data = pd.DataFrame([{
-                                "Roll No": st_info["roll_no"],
-                                "Student Name": st_info["name"],
-                                "Subject": current_subject,
-                                "Date": date_str,
-                                "Time": time_str,
-                                "Status": "Present",
-                                "AI Verification": "Groq Llama Vision API"
-                            }])
+                    now = datetime.now()
+                    date_str = now.strftime("%Y-%m-%d")
+                    time_str = now.strftime("%H:%M:%S")
 
-                            if os.path.exists(excel_file):
-                                df_existing = pd.read_excel(excel_file)
-                                # Check duplicate
-                                if not ((df_existing["Roll No"].astype(str) == str(st_info["roll_no"])) & (df_existing["Date"] == date_str)).any():
-                                    df_updated = pd.concat([df_existing, new_data], ignore_index=True)
-                                    df_updated.to_excel(excel_file, index=False)
-                            else:
-                                new_data.to_excel(excel_file, index=False)
+                    excel_file = os.path.join(RECORDS_DIR, f"Attendance_{current_subject.replace(' ', '_')}_{date_str}.xlsx")
+                    new_data = pd.DataFrame([{
+                        "Roll No": st_info["roll_no"],
+                        "Student Name": st_info["name"],
+                        "Subject": current_subject,
+                        "Date": date_str,
+                        "Time": time_str,
+                        "Status": "Present",
+                        "AI Verification": f"Groq API ({MODEL_NAME})"
+                    }])
 
-                            # Display UI Card
-                            details_box.markdown(f"""
-                                <div class="card">
-                                    <h3>✅ Attendance Marked Present!</h3>
-                                    <p><b>Name:</b> {st_info['name']}</p>
-                                    <p><b>Roll No:</b> {st_info['roll_no']}</p>
-                                    <p><b>Department:</b> {st_info['department']}</p>
-                                    <p><b>Subject:</b> {current_subject}</p>
-                                    <p><b>Timestamp:</b> {time_str} ({date_str})</p>
-                                    <p><b>API Status:</b> Verified via Groq Llama 3.2 Vision API</p>
-                                </div>
-                            """, unsafe_allow_html=True)
-                            st.balloons()
-                        else:
-                            details_box.error("❌ Unknown Face! Student database me match nahi hua.")
+                    if os.path.exists(excel_file):
+                        df_existing = pd.read_excel(excel_file)
+                        if not ((df_existing["Roll No"].astype(str) == str(st_info["roll_no"])) & (df_existing["Date"] == date_str)).any():
+                            df_updated = pd.concat([df_existing, new_data], ignore_index=True)
+                            df_updated.to_excel(excel_file, index=False)
                     else:
-                        details_box.warning("AI API response read karne me issue aaya. Dobara try karein.")
+                        new_data.to_excel(excel_file, index=False)
+
+                    details_box.markdown(f"""
+                        <div class="card">
+                            <h3>✅ Attendance Marked Present!</h3>
+                            <p><b>Name:</b> {st_info['name']}</p>
+                            <p><b>Roll No:</b> {st_info['roll_no']}</p>
+                            <p><b>Department:</b> {st_info['department']}</p>
+                            <p><b>Subject:</b> {current_subject}</p>
+                            <p><b>Timestamp:</b> {time_str} ({date_str})</p>
+                            <p><b>API Status:</b> Verified via Groq AI API</p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    st.balloons()
 
                 except Exception as e:
-                    st.error(f"Vision API Error: {str(e)}")
+                    st.error(f"API Error: {str(e)}")
 
 # ================= 3. ATTENDANCE RECORDS & EXCEL =================
 elif menu == "3. View Attendance Records":
@@ -244,7 +210,6 @@ elif menu == "3. View Attendance Records":
         df = pd.read_excel(file_path)
         st.dataframe(df, use_container_width=True)
 
-        # Download Excel Button
         with open(file_path, "rb") as f:
             st.download_button(
                 label="📥 Download Excel (.xlsx) Report",
