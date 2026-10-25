@@ -444,12 +444,16 @@ elif page == "live":
     live_photo = None
 
     with col_cam:
-        if current_subject:
-            card_start("Camera", f"Marking attendance for {current_subject}.")
-            live_photo = st.camera_input("Scan face", label_visibility="collapsed", key=f"cam_{current_subject}")
-            card_end()
-        else:
-            st.info("Choose a subject above to open the camera.")
+        cam_note = (
+            f"Marking attendance for {current_subject}."
+            if current_subject
+            else "Choose a subject above before taking the photo."
+        )
+        card_start("Camera", cam_note)
+        live_photo = st.camera_input(
+            "Scan face", label_visibility="collapsed", key=f"cam_{current_subject or 'none'}"
+        )
+        card_end()
 
     with col_info:
         st.markdown("#### Result")
@@ -459,7 +463,9 @@ elif page == "live":
             unsafe_allow_html=True,
         )
 
-    if live_photo is not None and current_subject:
+    if live_photo is not None and not current_subject:
+        st.warning("Choose a subject first, then take the photo again.")
+    elif live_photo is not None:
         if not students_db:
             st.warning("No students yet. Register a student first.")
         else:
