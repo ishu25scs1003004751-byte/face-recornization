@@ -48,6 +48,11 @@ SUBJECTS_FILE = "subjects.json"
 DEFAULT_SUBJECTS = ["Data Structures", "Operating Systems", "Machine Learning", "Python"]
 BASE_COLS = ["Roll No", "Student Name", "Department"]
 DATE_FILE_RE = r"^Attendance_\d{4}-\d{2}-\d{2}\.xlsx$"
+TIME_SUFFIX = " (Time)"
+
+
+def subject_cols(df):
+    return [c for c in df.columns if c not in BASE_COLS and not str(c).endswith(TIME_SUFFIX)]
 
 
 def save_subjects(data):
@@ -302,7 +307,7 @@ if page == "home":
     today_file = os.path.join(RECORDS_DIR, f"Attendance_{today}.xlsx")
     sheets_today = 0
     if os.path.exists(today_file):
-        sheets_today = len([c for c in pd.read_excel(today_file, nrows=0).columns if c not in BASE_COLS])
+        sheets_today = len(subject_cols(pd.read_excel(today_file, nrows=0)))
     total_sheets = len([f for f in os.listdir(RECORDS_DIR) if re.match(DATE_FILE_RE, f)])
 
     st.markdown(
@@ -488,7 +493,7 @@ elif page == "live":
             name = new_sub.strip()
             if not name:
                 st.error("Type a subject name first.")
-            elif name in BASE_COLS or name.lower() in [x.lower() for x in subjects]:
+            elif name in BASE_COLS or name.endswith(TIME_SUFFIX) or name.lower() in [x.lower() for x in subjects]:
                 st.warning("That subject already exists, or the name is not allowed.")
             else:
                 subjects.append(name)
@@ -588,14 +593,23 @@ elif page == "live":
                 if new_rows:
                     df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
 
+                tcol = current_subject + TIME_SUFFIX
                 if current_subject not in df.columns:
                     df[current_subject] = "Absent"
-                sub_cols = [c for c in df.columns if c not in BASE_COLS]
-                df[sub_cols] = df[sub_cols].fillna("Absent")
+                for c in subject_cols(df):
+                    df[c] = df[c].fillna("Absent")
+                    t = c + TIME_SUFFIX
+                    if t not in df.columns:
+                        df[t] = "-"
+                    df[t] = df[t].fillna("-")
+                # Keep each subject's status column next to its time column
+                df = df[BASE_COLS + [x for c in subject_cols(df) for x in (c, c + TIME_SUFFIX)]]
 
                 row = df["Roll No"].astype(str) == str(st_info["roll_no"])
                 already = bool((df.loc[row, current_subject] == "Present").any())
                 df.loc[row, current_subject] = "Present"
+                if not already:
+                    df.loc[row, tcol] = time_str
                 df.to_excel(excel_file, index=False)
 
                 total_students = len(df)
@@ -632,7 +646,7 @@ elif page == "live":
 # VIEW ATTENDANCE
 # ==================================================================
 elif page == "view":
-    page_header("View attendance", "See any date, any subject, or any student's overall percentage.")
+    page_header("View attendance", "See any date, any subject, or any student, with the time each class was marked.")
 
     excel_files = sorted([f for f in os.listdir(RECORDS_DIR) if re.match(DATE_FILE_RE, f)])
 
@@ -643,26 +657,34 @@ elif page == "view":
         d = pd.read_excel(os.path.join(RECORDS_DIR, fn), dtype={"Roll No": str})
         return d.drop_duplicates(subset=["Roll No"])
 
+    def time_of(row_or_df, subject):
+        tc = subject + TIME_SUFFIX
+        return str(row_or_df[tc]) if tc in row_or_df.index else "-"
+
     def colour_status(val):
-        if val == "Present":
+        v = str(val)
+        if v.startswith("Present"):
             return "background-color: #DFF1EF; color: #0A5F5E; font-weight: 600"
-        if val == "Absent":
+        if v.startswith("Absent"):
             return "background-color: #FDF0DC; color: #9A5B00; font-weight: 600"
         return ""
+
+    def show_cell(status, t):
+        return f"{status} · {t}" if status == "Present" and t not in ("-", "nan", "") else status
 
     if not excel_files:
         st.info("No attendance sheets yet. Take attendance first and the sheets will appear here.")
     else:
-        tab_day, tab_subject, tab_student = st.tabs(
-            ["By date", "By subject (date-wise)", "Student-wise percentage"]
+        tab_day, tab_subject, tab_student, tab_pct = st.tabs(
+            ["By date", "By subject (date-wise)", "By student (date-wise)", "Percentages"]
         )
 
-        # ---- By date: one sheet, every subject as a column ----
+        # ---- By date: one sheet, each subject has a status and a time column ----
         with tab_day:
             sel_date = st.selectbox("Date", [file_date(f) for f in reversed(excel_files)])
             selected_file = f"Attendance_{sel_date}.xlsx"
             df = read_sheet(selected_file)
-            sub_cols = [c for c in df.columns if c not in BASE_COLS]
+            sub_cols = subject_cols(df)
 
             m1, m2 = st.columns(2)
             m1.metric("Students", len(df))
@@ -692,7 +714,7 @@ elif page == "view":
                     },
                 )
 
-            st.markdown("#### Student sheet")
+            st.markdown(f"#### Student sheet for {sel_date}")
             st.dataframe(
                 df.style.map(colour_status, subset=sub_cols) if sub_cols else df,
                 use_container_width=True,
@@ -712,30 +734,38 @@ elif page == "view":
                 {
                     c
                     for fn in excel_files
-                    for c in pd.read_excel(os.path.join(RECORDS_DIR, fn), nrows=0).columns
-                    if c not in BASE_COLS
+                    for c in subject_cols(pd.read_excel(os.path.join(RECORDS_DIR, fn), nrows=0))
                 }
             )
             if not all_subjects:
                 st.info("No subject has been marked yet.")
             else:
                 subj = st.selectbox("Subject", all_subjects, key="view_subject")
-                frames = []
+                f_stat, f_disp = [], []
                 for fn in excel_files:
                     d = read_sheet(fn)
-                    if subj in d.columns:
-                        part = d[["Roll No", "Student Name", subj]].rename(columns={subj: file_date(fn)})
-                        frames.append(part.set_index(["Roll No", "Student Name"]))
+                    if subj not in d.columns:
+                        continue
+                    stat = d[subj].astype(str)
+                    tc = subj + TIME_SUFFIX
+                    tms = d[tc].astype(str) if tc in d.columns else pd.Series("-", index=d.index)
+                    key = pd.MultiIndex.from_frame(d[["Roll No", "Student Name"]])
+                    f_stat.append(pd.Series(stat.values, index=key, name=file_date(fn)))
+                    f_disp.append(
+                        pd.Series([show_cell(a, b) for a, b in zip(stat, tms)], index=key, name=file_date(fn))
+                    )
 
-                grid = pd.concat(frames, axis=1).fillna("-")
-                date_cols = list(grid.columns)
-                grid["Present"] = (grid[date_cols] == "Present").sum(axis=1)
-                grid["Classes"] = grid[date_cols].isin(["Present", "Absent"]).sum(axis=1)
-                grid["Attendance %"] = (grid["Present"] / grid["Classes"].where(grid["Classes"] > 0) * 100).round(1)
-                grid["Attendance %"] = grid["Attendance %"].fillna(0.0)
-                grid = grid.reset_index()
+                g_stat = pd.concat(f_stat, axis=1).fillna("-")
+                g_disp = pd.concat(f_disp, axis=1).fillna("-")
+                date_cols = list(g_disp.columns)
+                g_disp["Present"] = (g_stat == "Present").sum(axis=1)
+                g_disp["Classes"] = g_stat.isin(["Present", "Absent"]).sum(axis=1)
+                g_disp["Attendance %"] = (
+                    (g_disp["Present"] / g_disp["Classes"].where(g_disp["Classes"] > 0) * 100).round(1).fillna(0.0)
+                )
+                grid = g_disp.reset_index()
 
-                st.caption(f"{subj}: {len(date_cols)} date(s) recorded. A dash means the student had no row on that date.")
+                st.caption(f"{subj}: {len(date_cols)} date(s). Present cells show the time attendance was marked.")
                 st.dataframe(
                     grid.style.map(colour_status, subset=date_cols),
                     use_container_width=True,
@@ -755,12 +785,79 @@ elif page == "view":
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
 
-        # ---- Student-wise percentage across all subjects ----
+        # ---- By student: dates down the side, subjects across, with times ----
         with tab_student:
+            people = {}
+            for fn in excel_files:
+                for _, r in read_sheet(fn)[["Roll No", "Student Name"]].iterrows():
+                    people[str(r["Roll No"])] = r["Student Name"]
+            roll_pick = st.selectbox(
+                "Student", list(people), format_func=lambda r: f"{people[r]} ({r})", key="view_student"
+            )
+
+            rows = []
+            for fn in excel_files:
+                d = read_sheet(fn)
+                m = d[d["Roll No"].astype(str) == roll_pick]
+                if m.empty:
+                    continue
+                r = m.iloc[0]
+                for c in subject_cols(d):
+                    rows.append(
+                        {"Date": file_date(fn), "Subject": c, "Status": str(r[c]), "Time": time_of(r, c)}
+                    )
+
+            if not rows:
+                st.info("No subject has been marked for this student yet.")
+            else:
+                log = pd.DataFrame(rows)
+                held = len(log)
+                pres = int((log["Status"] == "Present").sum())
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Classes held", held)
+                k2.metric("Present", pres)
+                k3.metric("Attendance", f"{round(pres / held * 100, 1)}%")
+
+                log["Shown"] = [show_cell(s_, t_) for s_, t_ in zip(log["Status"], log["Time"])]
+                grid = (
+                    log.pivot_table(index="Date", columns="Subject", values="Shown", aggfunc="first")
+                    .fillna("-")
+                    .sort_index(ascending=False)
+                    .reset_index()
+                )
+                grid.columns.name = None
+                st.markdown("#### Date-wise attendance")
+                st.dataframe(
+                    grid.style.map(colour_status, subset=[c for c in grid.columns if c != "Date"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                per_sub = (
+                    log.assign(P=(log["Status"] == "Present").astype(int))
+                    .groupby("Subject")["P"]
+                    .agg(Classes="count", Present="sum")
+                    .reset_index()
+                )
+                per_sub["Attendance %"] = (per_sub["Present"] / per_sub["Classes"] * 100).round(1)
+                st.markdown("#### Subject-wise")
+                st.dataframe(
+                    per_sub,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Attendance %": st.column_config.ProgressColumn(
+                            "Attendance %", min_value=0, max_value=100, format="%.1f%%"
+                        )
+                    },
+                )
+
+        # ---- Percentages for every student ----
+        with tab_pct:
             records = []
             for fn in excel_files:
                 d = read_sheet(fn)
-                for c in [c for c in d.columns if c not in BASE_COLS]:
+                for c in subject_cols(d):
                     part = d[["Roll No", "Student Name"]].copy()
                     part["Subject"] = c
                     part["Present"] = (d[c] == "Present").astype(int)
