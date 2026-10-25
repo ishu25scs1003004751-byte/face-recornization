@@ -386,27 +386,35 @@ elif page == "register":
 # LIVE ATTENDANCE
 # ==================================================================
 elif page == "live":
-    page_header("Live attendance", "Choose the subject first, then scan the student's face.")
+    page_header("Live attendance", "Choose the subject, take the photo, then press Mark present.")
 
     subjects = load_subjects()
     now = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
+    PICK = "— Choose a subject —"
+    NONE_OPT = "— None —"
+
+    if "cam_n" not in st.session_state:
+        st.session_state.cam_n = 0
+    if "last_result" not in st.session_state:
+        st.session_state.last_result = None
 
     # A subject added a moment ago becomes the selected one on this run
     if "pending_subject" in st.session_state:
         st.session_state["live_subject"] = st.session_state.pop("pending_subject")
+    if st.session_state.get("live_subject") not in [PICK] + subjects:
+        st.session_state["live_subject"] = PICK
+    if st.session_state.get("rm_sub") not in [NONE_OPT] + subjects:
+        st.session_state["rm_sub"] = NONE_OPT
 
     card_start(
         "Subject",
         f"Today is {now.strftime('%d %b %Y')}. Attendance goes into today's sheet, in this subject's own column.",
     )
-    current_subject = st.selectbox(
-        "Which subject are you taking attendance for?",
-        subjects,
-        index=None,
-        placeholder="Choose a subject",
-        key="live_subject",
-    )
+    picked = st.selectbox("Which subject are you taking attendance for?", [PICK] + subjects, key="live_subject")
+    current_subject = None if picked == PICK else picked
+    if current_subject:
+        st.caption(f"Selected subject: **{current_subject}**")
 
     with st.expander("Add or remove a subject"):
         a1, a2 = st.columns([3, 1], vertical_alignment="bottom")
@@ -429,82 +437,78 @@ elif page == "live":
         if subjects:
             r1, r2 = st.columns([3, 1], vertical_alignment="bottom")
             with r1:
-                to_remove = st.selectbox(
-                    "Remove a subject", subjects, index=None, placeholder="Choose a subject to remove", key="rm_sub"
-                )
+                to_remove = st.selectbox("Remove a subject", [NONE_OPT] + subjects, key="rm_sub")
             with r2:
                 rm_clicked = st.button("Remove", key="rm_btn", type="secondary")
-            if rm_clicked and to_remove:
+            if rm_clicked and to_remove != NONE_OPT:
                 subjects.remove(to_remove)
                 save_subjects(subjects)
                 st.rerun()
     card_end()
 
     col_cam, col_info = st.columns([1.2, 1], gap="large")
-    live_photo = None
 
     with col_cam:
-        cam_note = (
-            f"Marking attendance for {current_subject}."
-            if current_subject
-            else "Choose a subject above before taking the photo."
-        )
-        card_start("Camera", cam_note)
+        card_start("Camera", "Take the student's photo, then press Mark present.")
         live_photo = st.camera_input(
-            "Scan face", label_visibility="collapsed", key=f"cam_{current_subject or 'none'}"
+            "Scan face", label_visibility="collapsed", key=f"live_cam_{st.session_state.cam_n}"
         )
         card_end()
+        mark_clicked = st.button("Mark present", key="mark_btn")
 
     with col_info:
         st.markdown("#### Result")
-        status_card = st.empty()
-        status_card.markdown(
-            '<div class="result-wait">Take a photo and the result will show up here.</div>',
-            unsafe_allow_html=True,
-        )
+        if st.session_state.last_result:
+            st.markdown(st.session_state.last_result, unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="result-wait">Take a photo and press Mark present. The result will show up here.</div>',
+                unsafe_allow_html=True,
+            )
 
-    if live_photo is not None and not current_subject:
-        st.warning("Choose a subject first, then take the photo again.")
-    elif live_photo is not None:
-        if not students_db:
+    marked_ok = False
+    if mark_clicked:
+        if not current_subject:
+            st.error("Choose a subject first.")
+        elif live_photo is None:
+            st.error("Take the student's photo first.")
+        elif not students_db:
             st.warning("No students yet. Register a student first.")
         else:
-            with st.spinner("Marking attendance..."):
-                try:
-                    latest_roll = list(students_db.keys())[-1]
-                    st_info = students_db[latest_roll]
-                    time_str = now.strftime("%H:%M:%S")
-                    excel_file = os.path.join(RECORDS_DIR, f"Attendance_{date_str}.xlsx")
+            try:
+                latest_roll = list(students_db.keys())[-1]
+                st_info = students_db[latest_roll]
+                time_str = now.strftime("%H:%M:%S")
+                excel_file = os.path.join(RECORDS_DIR, f"Attendance_{date_str}.xlsx")
 
-                    # One sheet per date: student rows, one column per subject
-                    if os.path.exists(excel_file):
-                        df = pd.read_excel(excel_file, dtype={"Roll No": str})
-                    else:
-                        df = pd.DataFrame(columns=BASE_COLS)
+                # One sheet per date: student rows, one column per subject
+                if os.path.exists(excel_file):
+                    df = pd.read_excel(excel_file, dtype={"Roll No": str})
+                else:
+                    df = pd.DataFrame(columns=BASE_COLS)
 
-                    known = set(df["Roll No"].astype(str))
-                    new_rows = [
-                        {"Roll No": str(d["roll_no"]), "Student Name": d["name"], "Department": d["department"]}
-                        for d in students_db.values()
-                        if str(d["roll_no"]) not in known
-                    ]
-                    if new_rows:
-                        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+                known = set(df["Roll No"].astype(str))
+                new_rows = [
+                    {"Roll No": str(d["roll_no"]), "Student Name": d["name"], "Department": d["department"]}
+                    for d in students_db.values()
+                    if str(d["roll_no"]) not in known
+                ]
+                if new_rows:
+                    df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
 
-                    if current_subject not in df.columns:
-                        df[current_subject] = "Absent"
-                    sub_cols = [c for c in df.columns if c not in BASE_COLS]
-                    df[sub_cols] = df[sub_cols].fillna("Absent")
+                if current_subject not in df.columns:
+                    df[current_subject] = "Absent"
+                sub_cols = [c for c in df.columns if c not in BASE_COLS]
+                df[sub_cols] = df[sub_cols].fillna("Absent")
 
-                    df.loc[df["Roll No"].astype(str) == str(st_info["roll_no"]), current_subject] = "Present"
-                    df.to_excel(excel_file, index=False)
+                df.loc[df["Roll No"].astype(str) == str(st_info["roll_no"]), current_subject] = "Present"
+                df.to_excel(excel_file, index=False)
 
-                    total_students = len(df)
-                    present_count = int((df[current_subject] == "Present").sum())
-                    pct = round(present_count / total_students * 100, 1) if total_students else 0
+                total_students = len(df)
+                present_count = int((df[current_subject] == "Present").sum())
+                pct = round(present_count / total_students * 100, 1) if total_students else 0
 
-                    status_card.markdown(
-                        f"""
+                st.session_state.last_result = f"""
 <div class="result-ok">
   <h3>✓ Marked present</h3>
   <div class="row"><span>Name</span><b>{st_info['name']}</b></div>
@@ -513,13 +517,20 @@ elif page == "live":
   <div class="row"><span>Time</span><b>{time_str} · {date_str}</b></div>
   <div class="row"><span>Class so far</span><b>{present_count}/{total_students} present ({pct}%)</b></div>
 </div>
-""",
-                        unsafe_allow_html=True,
-                    )
-                    with st.expander("See today's sheet"):
-                        st.dataframe(df, use_container_width=True, hide_index=True)
-                except Exception as e:
-                    st.error(f"Could not mark attendance: {e}")
+"""
+                st.session_state.cam_n += 1  # fresh camera for the next student
+                marked_ok = True
+            except Exception as e:
+                st.error(f"Could not mark attendance: {e}")
+    if marked_ok:
+        st.rerun()
+
+    today_file = os.path.join(RECORDS_DIR, f"Attendance_{date_str}.xlsx")
+    if os.path.exists(today_file):
+        with st.expander("Today's sheet"):
+            st.dataframe(
+                pd.read_excel(today_file, dtype={"Roll No": str}), use_container_width=True, hide_index=True
+            )
 
 # ==================================================================
 # VIEW ATTENDANCE
